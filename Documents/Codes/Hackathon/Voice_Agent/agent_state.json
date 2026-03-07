@@ -1,0 +1,31 @@
+{
+  "agent_id": "agent_2601kk402bcnf57aabb4se859b8e",
+  "kb_ids": [
+    {
+      "type": "file",
+      "id": "DrDxyxXuMg8CAvE5bdmz",
+      "name": "Baggage Policy"
+    },
+    {
+      "type": "file",
+      "id": "XJFJKPweW0e3ZpkmERWc",
+      "name": "Change Cancel Policy"
+    },
+    {
+      "type": "file",
+      "id": "PNgHi6NQSkxDFDWrkZlT",
+      "name": "Compensation Policy"
+    },
+    {
+      "type": "file",
+      "id": "HVJ3fEHFlcx0FwjZXTfT",
+      "name": "Loyalty Program"
+    },
+    {
+      "type": "file",
+      "id": "9zvlMv6PyxDViKGkwrC5",
+      "name": "FAQ"
+    }
+  ],
+  "supervisor_agent_id": "agent_8601kk46qngye6dssmbr2xfk2vvg"
+}
