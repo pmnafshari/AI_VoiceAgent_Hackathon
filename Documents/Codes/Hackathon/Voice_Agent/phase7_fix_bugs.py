@@ -1,7 +1,7 @@
 import json
 import requests
 
-WRITE_KEY = "1b3bcecf6ffa5ae8be96a656df0ff752e6bd97c76a79c7d5ca7be4a6093328e4"
+WRITE_KEY = "f73f1cd857c34ec0d091abc1e4f80fcbb3bb333f68c88825375fd903559ad26a"
 BASE_URL = "https://api.elevenlabs.io"
 STATE_PATH = "/Users/hitson/Documents/Codes/Hackathon/Voice_Agent/agent_state.json"
 

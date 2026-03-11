@@ -10,27 +10,38 @@ dist/
 build/
 
 # Virtual environments
-.env
 .venv
 env/
 venv/
 ENV/
 
-# Environment variables and secrets
+# Environment variables and secrets — never commit these
 .env
 .env.*
 *.env
 secrets.json
 secrets.yaml
+secrets.yml
 api_keys.txt
+config.local.*
 
-# Agent runtime state
+# Agent runtime state — contains live agent IDs
 agent_state.json
+
+# Hackathon brief and internal planning documents
+*.pdf
+*.csv
+
+# Test notes
+testcase.md
 
 # macOS
 .DS_Store
 .AppleDouble
+.LSOverride
 ._*
+.Spotlight-V100
+.Trashes
 
 # IDE
 .idea/
@@ -41,7 +52,7 @@ agent_state.json
 # Claude Code
 .claude/
 
-# Logs
+# Logs and temp files
 *.log
 *.tmp
 logs/

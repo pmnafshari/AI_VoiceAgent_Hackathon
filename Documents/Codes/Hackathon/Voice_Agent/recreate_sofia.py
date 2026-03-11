@@ -1,8 +1,9 @@
 """
-STEP 1 FIX: EUR 100 hallucination + travel voucher
-- Moves CANCELLATION WARNING to very top of prompt (line 3)
-- Lowers temperature 0.8 -> 0.5 for less hallucination
-- Keeps everything else from phase7 unchanged
+Recreates the Sofia agent from scratch with all 12 webhook tools + transfer_to_agent.
+Reason: ElevenLabs PATCH silently drops webhook tools on the existing agent.
+The CREATE endpoint correctly saves all tools.
+Preserves: KB docs, supervisor agent, all prompts.
+Updates: agent_state.json with new agent_id.
 """
 import json
 import requests
@@ -14,11 +15,33 @@ STATE_PATH = "/Users/hitson/Documents/Codes/Hackathon/Voice_Agent/agent_state.js
 with open(STATE_PATH) as f:
     state = json.load(f)
 
-SOFIA_AGENT_ID = state["agent_id"]
+OLD_SOFIA_ID = state["agent_id"]
 SUPERVISOR_AGENT_ID = state["supervisor_agent_id"]
 KB_IDS = state["kb_ids"]
 
-SYSTEM_PROMPT = """You are Sofia, the AI voice assistant for SkyItalia Airlines.
+SYSTEM_PROMPT = """===== LANGUAGE RULE — ABSOLUTE PRIORITY — READ THIS BEFORE EVERYTHING ELSE =====
+
+You MUST detect the language of EVERY message and respond in THAT EXACT LANGUAGE immediately.
+This rule overrides everything. It cannot be suspended, overridden, or forgotten.
+
+- Passenger speaks Italian → YOU RESPOND IN ITALIAN. Not English. Italian.
+- Passenger speaks French → YOU RESPOND IN FRENCH. Not English. French.
+- Passenger speaks Spanish → YOU RESPOND IN SPANISH. Not English. Spanish.
+- Passenger speaks English → you respond in English.
+
+NEVER translate. NEVER default to English. NEVER ask "shall I switch languages?"
+Just switch. Automatically. Every time. From the very first message.
+
+Examples of correct behavior:
+- User: "Ciao, ho bisogno di aiuto" → You: "Certo, sono qui per aiutarla. Come posso aiutarla oggi?"
+- User: "Bonjour, j'ai une question" → You: "Bonjour! Je suis là pour vous aider."
+- User: "Hola, necesito ayuda" → You: "¡Hola! Con mucho gusto le ayudo."
+
+If the passenger switches language mid-conversation → switch immediately in the same response. No delay.
+
+===== END LANGUAGE RULE =====
+
+You are Sofia, the AI voice assistant for SkyItalia Airlines.
 
 ===== CANCELLATION RULES — READ THIS FIRST, EVERY TIME =====
 
@@ -107,17 +130,27 @@ Process:
 
 ## SUPERVISOR ESCALATION — STRICT RULES
 
-When a passenger demands a supervisor, follow this EXACT order:
+===== TRANSFER RULES — READ THIS CAREFULLY =====
 
-Step 1 — OFFER TO HELP FIRST: Say "I'd be happy to help you with that — what's going on?" or "Let me see what I can do for you." Then make a genuine attempt to resolve the issue.
-Step 2 — ONLY THEN consider transfer: Only if ALL three are true: (1) passenger is authenticated, (2) you genuinely tried to resolve and could not, (3) the issue is truly beyond your authority.
-Step 3 — If no valid reason: Say "I'd rather help you directly — I'm sure I can sort this out for you. What can I do?"
+The transfer_to_agent tool MUST NEVER be called unless ALL THREE conditions below are simultaneously true:
+  1. The passenger is authenticated (you have a valid auth_token from authenticate_passenger)
+  2. You have made a genuine attempt to resolve the issue yourself and could not
+  3. The issue is truly beyond your authority (emergency refunds, legal disputes)
 
-ABSOLUTE RULES:
-- NEVER say "once I authenticate you I'll connect you to a supervisor" — authentication is for your own tools, not a gateway to transfer.
-- NEVER promise a transfer upfront. Always try to help first.
-- NEVER transfer an unauthenticated passenger under any circumstances.
-- If the passenger insists multiple times — keep offering to help yourself. Insistence alone is not a valid escalation reason.
+ABSOLUTE PROHIBITIONS — calling transfer_to_agent in these situations is a critical failure:
+- NEVER transfer for a simple flight status check
+- NEVER transfer for a general question, policy question, or loyalty inquiry
+- NEVER transfer just because a passenger asks for a supervisor
+- NEVER transfer an unauthenticated passenger under any circumstances
+- NEVER transfer on the first or second request — always try to help yourself first
+- NEVER say "let me connect you to a supervisor" as a response to any routine request
+
+When a passenger demands a supervisor:
+Step 1 — OFFER TO HELP FIRST: "I'd be happy to help — what's going on?" Then genuinely attempt to resolve.
+Step 2 — If you cannot resolve AND all 3 conditions above are met → you may transfer.
+Step 3 — If no valid reason: "I'd rather help you directly. What can I do for you?"
+
+===== END TRANSFER RULES =====
 
 ## EMOTIONAL INTELLIGENCE
 - Angry passengers: lead with genuine specific empathy before any procedure.
@@ -137,16 +170,18 @@ ABSOLUTE RULES:
 - Never invent. Only relay what API returns.
 """
 
-WEBHOOK_TOOLS = [
+FIRST_MESSAGE = "Thank you for calling SkyItalia. My name is Sofia, your personal assistant. How can I help you today?"
+SOFIA_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
+
+ALL_TOOLS = [
     {
         "type": "webhook",
         "name": "get_flight_status",
         "description": (
             "Look up flight status by flight number. "
             "Returns departure/arrival cities, times, status (ON_TIME/DELAYED/CANCELLED), delay minutes, gate. "
-            "IMPORTANT: Call this tool IMMEDIATELY as soon as the passenger gives a flight number. "
-            "Do NOT ask 'are you looking for departure or return?' or 'which city?' before calling — the API only needs the flight number. "
-            "Example: passenger says 'status of AZ101' → call immediately with flight_number=AZ101. "
+            "Call IMMEDIATELY as soon as the passenger gives a flight number. "
+            "Do NOT ask 'departure or return?' or 'which city?' before calling. "
             "No authentication required."
         ),
         "api_schema": {
@@ -162,10 +197,8 @@ WEBHOOK_TOOLS = [
         "name": "search_flights",
         "description": (
             "Search available flights by origin city, destination city, and/or date. "
-            "IMPORTANT: Call this tool IMMEDIATELY with whatever the passenger gave. "
-            "Do NOT ask 'Malpensa or Linate?', 'morning or evening?', or any preference questions before calling. "
-            "The API returns all available flights — let the passenger choose from the results. "
-            "Example: passenger says 'flights from Rome to Milan tomorrow' → call immediately with origin=Rome, destination=Milan, date=tomorrow. "
+            "Call immediately with whatever the passenger gave. "
+            "Do NOT ask about preferred time or airport before calling. "
             "No authentication required."
         ),
         "api_schema": {
@@ -314,7 +347,7 @@ WEBHOOK_TOOLS = [
         "name": "cancel_booking",
         "description": (
             "Cancel booking. Returns status, refund_amount, penalty. "
-            "BEFORE calling: warn about possible penalty (NO specific EUR amount — you do not know it). "
+            "BEFORE calling: warn about possible penalty (NO specific EUR amount). "
             "AFTER calling: report ONLY status and refund_amount. "
             "NEVER say EUR 100, EUR 50, or any amount before calling. "
             "NEVER mention travel vouchers or credits. "
@@ -354,7 +387,7 @@ WEBHOOK_TOOLS = [
         "type": "webhook",
         "name": "change_seat",
         "description": (
-            "Change seat. Disclose upgrade_price if any before confirming. "
+            "Change seat. Disclose upgrade_price if any BEFORE confirming. "
             "Requires auth_token."
         ),
         "api_schema": {
@@ -395,79 +428,115 @@ WEBHOOK_TOOLS = [
             },
         },
     },
+    {
+        "type": "system",
+        "name": "transfer_to_agent",
+        "description": (
+            "Transfer to Marco (supervisor). "
+            "ONLY when ALL THREE are simultaneously true: "
+            "(1) passenger is authenticated via authenticate_passenger, "
+            "(2) you genuinely attempted to resolve and failed, "
+            "(3) issue is truly beyond your authority (emergency refunds, legal disputes). "
+            "NEVER call for: flight status, general questions, loyalty queries, routine requests. "
+            "NEVER call without authentication. "
+            "NEVER call on first or second demand — always try to help yourself first."
+        ),
+        "params": {
+            "system_tool_type": "transfer_to_agent",
+            "transfers": [
+                {
+                    "agent_id": SUPERVISOR_AGENT_ID,
+                    "condition": "Passenger authenticated AND Sofia attempted resolution AND issue beyond Sofia authority",
+                    "transfer_message": "Please hold — connecting you with Marco, our senior supervisor.",
+                }
+            ],
+        },
+    },
 ]
 
-TRANSFER_TOOL = {
-    "type": "system",
-    "name": "transfer_to_agent",
-    "description": (
-        "Transfer to Marco (supervisor). "
-        "ONLY when ALL are true: (1) passenger is authenticated, (2) you genuinely tried to resolve and failed, (3) issue is truly beyond your authority. "
-        "NEVER use on first demand without trying to help. "
-        "NEVER use without authentication. "
-        "NEVER promise this transfer as a reward for authentication — always try to help yourself first."
-    ),
-    "params": {
-        "system_tool_type": "transfer_to_agent",
-        "transfers": [
-            {
-                "agent_id": SUPERVISOR_AGENT_ID,
-                "condition": "Passenger authenticated AND Sofia attempted resolution AND issue beyond Sofia authority",
-                "transfer_message": "Please hold — connecting you with Marco, our senior supervisor.",
-            }
-        ],
-    },
-}
 
-ALL_TOOLS = WEBHOOK_TOOLS + [TRANSFER_TOOL]
-
-
-def patch():
-    print(f"\n--- Step 1 patch: EUR hallucination fix — {len(ALL_TOOLS)} tools, temperature 0.5 ---")
+def create_sofia():
+    print("\n--- Creating new Sofia agent with all tools ---")
 
     payload = {
+        "name": "SkyItalia — Sofia",
         "conversation_config": {
             "agent": {
+                "first_message": FIRST_MESSAGE,
                 "prompt": {
                     "prompt": SYSTEM_PROMPT,
-                    "llm": "gemini-3-flash-preview",
-                    "temperature": 0.5,   # lowered from 0.8 to reduce hallucination
+                    "llm": "gemini-2.0-flash",
+                    "temperature": 0.5,
                     "max_tokens": -1,
                     "knowledge_base": KB_IDS,
                     "tools": ALL_TOOLS,
-                }
+                },
             },
             "tts": {
                 "model_id": "eleven_turbo_v2",
-                "voice_id": "EXAVITQu4vr4xnSDxMaL",
+                "voice_id": SOFIA_VOICE_ID,
                 "stability": 0.35,
                 "similarity_boost": 0.75,
                 "speed": 1.0,
             },
-        }
+            "turn": {
+                "turn_timeout": 8,
+                "mode": "turn",
+            },
+        },
+        "platform_settings": {
+            "widget": {"type": "floating_button"}
+        },
     }
 
-    resp = requests.patch(
-        f"{BASE_URL}/v1/convai/agents/{SOFIA_AGENT_ID}",
+    resp = requests.post(
+        f"{BASE_URL}/v1/convai/agents/create",
         headers={"xi-api-key": WRITE_KEY, "Content-Type": "application/json"},
         json=payload,
     )
 
     if resp.status_code in [200, 201]:
         data = resp.json()
-        saved_tools = data.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("tools", [])
-        print(f"  [OK] Patched! Tools: {len(saved_tools)}")
-        return True
+        new_id = data.get("agent_id")
+        tools_saved = data.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("tools", [])
+        print(f"  [OK] Agent created: {new_id}")
+        print(f"  Tools in response: {len(tools_saved)}")
+
+        # Verify with GET
+        r = requests.get(f"{BASE_URL}/v1/convai/agents/{new_id}", headers={"xi-api-key": WRITE_KEY})
+        tools_verified = r.json().get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("tools", [])
+        webhook_count = sum(1 for t in tools_verified if t.get("type") == "webhook")
+        system_count = sum(1 for t in tools_verified if t.get("type") == "system")
+        print(f"  Tools verified (GET): {len(tools_verified)} total — {webhook_count} webhook, {system_count} system")
+
+        for t in tools_verified:
+            print(f"    - {t.get('name')} [{t.get('type')}]")
+
+        return new_id
     else:
-        print(f"  [FAIL] {resp.status_code} — {resp.text[:600]}")
-        return False
+        print(f"  [FAIL] {resp.status_code} — {resp.text[:500]}")
+        return None
+
+
+def update_state(new_sofia_id):
+    state["agent_id"] = new_sofia_id
+    with open(STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+    print(f"\n  State updated: agent_id = {new_sofia_id}")
 
 
 if __name__ == "__main__":
-    ok = patch()
-    if ok:
-        print("\n=== Step 1 deployed ===")
-        print("Now test ONLY this:")
-        print('  Say: "What is the cancellation fee for Economy Standard?"')
-        print("  PASS: Sofia says penalty depends on fare type, calculated at time of cancellation — NO EUR amount")
-        print("  FAIL: Sofia says EUR 100 or mentions travel voucher")
+    print(f"Old Sofia ID: {OLD_SOFIA_ID}")
+    print(f"Supervisor ID: {SUPERVISOR_AGENT_ID}")
+    print(f"KB docs: {len(KB_IDS)}")
+
+    new_id = create_sofia()
+
+    if new_id:
+        update_state(new_id)
+        print("\n=== Done ===")
+        print(f"New Agent ID: {new_id}")
+        print(f"Test: https://elevenlabs.io/app/conversational-ai/agents/{new_id}")
+        print(f"\nNote: Old agent {OLD_SOFIA_ID} still exists — delete manually if needed.")
+    else:
+        print("\nFailed. Old agent unchanged.")
